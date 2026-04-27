@@ -17,7 +17,7 @@ on:
         required: false
         type: string
       decrypted_youtube_url:
-        description: "Direct URL to the decrypted YouTube IPA. The YouTube version will be detected automatically."
+        description: "Direct URL or Google Drive share URL to the decrypted YouTube IPA."
         default: ""
         required: true
         type: string
@@ -49,8 +49,6 @@ concurrency:
 jobs:
   build:
     name: Build uYouPlus
-    # macos-13 is retired/closing down and can queue or fail.
-    # macos-14 keeps this on Intel while avoiding the old runner pool.
     runs-on: macos-14
 
     permissions:
@@ -84,9 +82,16 @@ jobs:
           brew update
           brew install ldid dpkg make wget
 
+      - name: Install Python download helper
+        run: |
+          python3 -m pip install --user --upgrade pip
+          python3 -m pip install --user --upgrade gdown
+
       - name: Set PATH environment variable
         run: |
           echo "$(brew --prefix make)/libexec/gnubin" >> "$GITHUB_PATH"
+          echo "$HOME/Library/Python/3.12/bin" >> "$GITHUB_PATH"
+          echo "$HOME/Library/Python/3.11/bin" >> "$GITHUB_PATH"
 
       - name: Setup Theos
         uses: actions/checkout@v4.2.1
@@ -135,13 +140,40 @@ jobs:
             exit 1
           fi
 
-          wget "$YOUTUBE_URL" --no-verbose -O main/YouTube.ipa
+          rm -f main/YouTube.ipa main/YouTube.zip
+          rm -rf main/Payload
+
+          echo "==> Downloading YouTube IPA..."
+
+          if echo "$YOUTUBE_URL" | grep -q "drive.google.com"; then
+            echo "==> Google Drive URL detected. Using gdown."
+            python3 -m gdown "$YOUTUBE_URL" --fuzzy -O main/YouTube.ipa
+          else
+            echo "==> Direct URL detected. Using wget."
+            wget "$YOUTUBE_URL" --no-verbose -O main/YouTube.ipa
+          fi
+
+          echo "==> Downloaded file info:"
+          ls -lh main/YouTube.ipa
+          file main/YouTube.ipa
+
+          if ! unzip -tq main/YouTube.ipa >/dev/null 2>&1; then
+            echo "Downloaded file is not a valid IPA/zip."
+            echo "This usually means the URL returned an HTML page instead of the actual IPA."
+            echo "Use a direct IPA URL, or a public Google Drive share link with access set to Anyone with the link."
+            exit 1
+          fi
 
           cd "${{ github.workspace }}/main"
 
-          rm -rf Payload YouTube.zip
-          mv YouTube.ipa YouTube.zip
+          cp YouTube.ipa YouTube.zip
           unzip -q YouTube.zip
+
+          if [ ! -d "Payload/YouTube.app" ]; then
+            echo "Payload/YouTube.app was not found inside the IPA."
+            echo "Make sure this is a decrypted YouTube IPA, not a renamed file or webpage."
+            exit 1
+          fi
 
           youtube_version="$(defaults read "$(pwd)/Payload/YouTube.app/Info" CFBundleVersion)"
           echo "==> YouTube v${youtube_version} downloaded."
