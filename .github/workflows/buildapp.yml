@@ -11,31 +11,37 @@ on:
         default: "3.0.4"
         required: true
         type: string
+
       uyou_url:
         description: "The URL to download uYou .deb"
         default: "https://something.url/uyou.deb"
         required: false
         type: string
+
       decrypted_youtube_url:
         description: "Direct URL or Google Drive share URL to the decrypted YouTube IPA."
         default: ""
         required: true
         type: string
+
       bundle_id:
         description: "Modify the bundle ID. Not recommended."
         default: "com.google.ios.youtube"
         required: true
         type: string
+
       app_name:
         description: "Modify the app name shown on the Home Screen. Not recommended."
         default: "YouTube"
         required: true
         type: string
+
       create_release:
         description: "Create a draft release"
         default: true
         required: false
         type: boolean
+
       upload_artifact:
         description: "Upload artifact"
         default: false
@@ -50,7 +56,7 @@ jobs:
   build:
     name: Build uYouPlus
 
-    # Use Intel/x64. Plain macos-14 can run on arm64/M1.
+    # Intel/x64 macOS runner. Avoid plain macos-14, which may use arm64.
     runs-on: macos-14-large
 
     permissions:
@@ -73,16 +79,19 @@ jobs:
 
       - name: Install Homebrew dependencies
         run: |
+          set -euo pipefail
           brew update
           brew install ldid dpkg make wget pipx
 
       - name: Install Google Drive downloader
         run: |
+          set -euo pipefail
           pipx install gdown
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Set PATH environment variable
         run: |
+          set -euo pipefail
           echo "$(brew --prefix make)/libexec/gnubin" >> "$GITHUB_PATH"
 
       - name: Setup Theos
@@ -107,6 +116,7 @@ jobs:
 
           git clone -n --depth=1 --filter=tree:0 https://github.com/theos/sdks.git sdks
           cd sdks
+
           git sparse-checkout set --no-cone iPhoneOS16.5.sdk
           git checkout
 
@@ -142,8 +152,21 @@ jobs:
           echo "==> Downloading YouTube IPA..."
 
           if echo "$YOUTUBE_URL" | grep -q "drive.google.com"; then
-            echo "==> Google Drive URL detected. Using gdown."
-            gdown "$YOUTUBE_URL" --fuzzy -O main/YouTube.ipa
+            echo "==> Google Drive URL detected. Extracting file ID."
+
+            FILE_ID="$(echo "$YOUTUBE_URL" | sed -n 's#.*drive.google.com/file/d/\([^/]*\)/.*#\1#p')"
+
+            if [ -z "$FILE_ID" ]; then
+              FILE_ID="$(echo "$YOUTUBE_URL" | sed -n 's#.*[?&]id=\([^&]*\).*#\1#p')"
+            fi
+
+            if [ -z "$FILE_ID" ]; then
+              echo "Could not extract Google Drive file ID from URL."
+              exit 1
+            fi
+
+            echo "==> Downloading Google Drive file ID: $FILE_ID"
+            gdown "$FILE_ID" -O main/YouTube.ipa
           else
             echo "==> Direct URL detected. Using wget."
             wget "$YOUTUBE_URL" --no-verbose -O main/YouTube.ipa
